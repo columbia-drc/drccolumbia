@@ -1,0 +1,12 @@
+#ROS Service for getting a collision-free trajectory to a desired pose.
+
+geometry_msgs/Pose[] TargetPoses
+uint8 ManipulatorID
+float32[] Variances
+uint16 SamplingFrequency
+
+# The environment parameter is optional but if it's not provided the trajectory returned is not guaranteed to be collision free
+hubo_planning_common/HuboEnvironment Environment
+---
+hubo_robot_msgs/JointTrajectory PlannedTrajectory
+bool success
