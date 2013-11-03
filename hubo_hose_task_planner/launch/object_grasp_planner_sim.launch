@@ -1,0 +1,43 @@
+<launch>
+
+  <arg name="output" default="screen" />
+  <arg name="remapped_tf" default="/workstation_tf" />
+
+  <include file="$(find hubo_launch)/launch/display_drchubo_state.launch" >
+    <arg name="remapped_tf" value="$(arg remapped_tf)" />
+  </include>
+
+  <group ns="drchubo_workstation">
+    <node name="object_localizer" pkg="hose_localization" type="object_localizer.py" output="$(arg output)" >
+      <remap from="/tf" to="$(arg remapped_tf)" />
+    </node>
+
+	<node name="object_grasp_planner" pkg="hubo_hose_task_planner" type="ObjectGraspServer.py" output="$(arg output)" >
+      <remap from="/tf" to="$(arg remapped_tf)" />
+    </node>
+
+    <node name="hubo_marker_teleop" pkg="hubo_marker_teleop" type="hubo_marker_teleop.py" output="$(arg output)" >
+	  <remap from="/tf" to="$(arg remapped_tf)" />
+    </node>
+
+<node name="control_crystal_server" pkg="gui_robot_control" type="control_crystal.py" output="$(arg output)" >
+	  <remap from="/tf" to="$(arg remapped_tf)" />
+    </node>
+    
+    
+    <node name="rviz1" pkg="rviz" type="rviz" args="-d $(find hubo_planning_common)/rvizconfig/object_grasp_rviz_config.rviz" output="$(arg output)" >
+      <remap from="/tf" to="$(arg remapped_tf)" />
+    </node> 
+    <node name="console1" pkg="rqt_console" type="rqt_console" output="$(arg output)" >
+      <remap from="/tf" to="$(arg remapped_tf)" />
+    </node>
+    <!--
+    <node name="hubo_trajectory_server" pkg="hubo_motion_ros" type="hubo_trajectory_server" />
+    
+    <node name="kinematics_server" pkg="hubo_motion_ros" type="kinematics_server" output="screen" />
+    <node name="ps_mount_publisher" pkg="tf" type="static_transform_publisher" args="0.0381 -0.1397 0 0 0 1.57079632679 /Body_NK1 /Body_PS_Mount 100" />
+    <node name="ps1_publisher" pkg="tf" type="static_transform_publisher" args="0.0381 0 0.0127 0 0.84 0 /Body_PS_Mount /camera_link 100" />
+    <node name="ps2_publisher" pkg="tf" type="static_transform_publisher" args="0.0508 0 0.1016 0 0 0 /Body_PS_Mount /Body_PS2 100" />
+    
+  </group>
+</launch>
