@@ -286,6 +286,203 @@ class GraspPlanner( RobotCBiRRT ):
             traj, or_traj = getStraightTrajectory(end_pose, j, direction, steps)
             yield j, traj, or_traj
 
+    def turnCBiRRT(self, initial_pose, turn_transform, turn_bounds, manip_index = ComplexPlanningSrvRequest.RIGHT_ARM_INDEX, willPlayback = True):
+        """
+        @brief - Find a trajectory to the target pose that then allows straight line
+        motion from pregrasp_pose to target_pose ignoring collisions between the
+        manipulator and the environment
+
+        @param initial_pose -  The 4x4 transform matrix that we will want
+                                to put the end effector at immediately as a 4x4
+                                transform matrix
+
+        @param target_pose - The final pose 4x4 transform matrix that we will want
+                             to reach in world coordinates.
+
+        @param turn_bounds - A two item list, the former is the max acceptable
+                                        rotation, the latter is the min acceptable
+
+        @param manip_index - The manipulator identifier, either as a string or an integer
+
+        @returns a hubo_common_msgs/HuboTrajectoryMsg if a valid plan is found
+        None otherwise.
+        """
+        traj = None
+        
+        #lock environment
+        with self.env:
+            turn_trajectory = None
+            #Setup manipulator
+            manip = self.setupManipulator(manip_index)
+
+            #Get starting configuration
+            startjoints = self.robot.GetActiveDOFValues()
+
+            #The hand is allowed to be in collision with the target environment
+            #or the world in the final straight line motions to the grasp -- This allows
+            #us to push through the hose or other unimportant occlusions
+            #and to not worry about having too much padding on the target
+            #object to allow us to grasp it. 
+            self.setEndEffectorCollisions(manip_index, False)            
+
+
+            #Get a generator for straight line paths between these two points
+            turn_generator = self.turnPlanner(turn_bounds, manip_index)
+            
+        
+            #For each viable straight line trajectory, try to plan a motion to the start
+            #of that trajectory
+            for turn_traj in turn_generator:
+                #If the current trajectory is invalid, try the next one.
+                if turn_traj[1] == None:
+                    continue
+                
+                #The arm motion to the pregrasp pose should not ignore collisions
+                self.setEndEffectorCollisions(manip_index, True)            
+                
+                #Get the joint goal for this the start of this trajectory
+                goaljoints = numpy.array(turn_traj[2].GetWaypoint(0))
+
+
+                #Compose the planning string to reach that joint goal
+                cmdStr = 'RunCBiRRT '
+                cmdStr += 'supportlinks 2 '+self.footlinknames+' smoothingitrs '+str(100)+' jointgoals '+str(len(goaljoints))+' '+Serialize1DMatrix(matrix(goaljoints)) +'jointstarts ' + str(len(startjoints)) + ' ' + Serialize1DMatrix(matrix(startjoints))
+
+                #Run the planner
+                result = self.prob_cbirrt.SendCommand(cmdStr)
+                        
+                
+                #If there was a valid result, parse the resulting trajectory file
+                if result != '':
+                    pdb.set_trace()
+                    or_traj,config=create_trajectory(self.robot)           
+                    read_trajectory_from_file(or_traj,'cmovetraj.txt')
+                    traj = [turn_traj[1], self.orTrajToHuboTraj(or_traj)]
+
+                    break            
+                #If we didn't generate a valid plan, try the next straight line trajectory
+                #Disable end effector collisions again before calling the generator
+                #The prior state will be restored when we release the environment lock, so
+                #don't worry about it. 
+                self.setEndEffectorCollisions(manip_index, False)
+            
+                
+        return traj
+                
+            
+    def turnPlanner(self, start_pose, end_pose, manip_index, step_distance = .003):
+        """
+        @brief - Returns a generator for straight line trajectories between the start and
+        end poses given.
+
+        Assumes that they have the same orientation. Behavior is undefined if they don't.
+
+        @param start_pose - The 4x4 transform describing the start pose for the plan in
+                            world coordinates
+
+
+        @param end_pose - The 4x4 transform describing the end pose for the plan in
+                            world coordinates
+
+        @param manip_index - The manipulator id as either an integer or a name
+
+        @param step_distance - The step size in the comps.manipulation2 plugin. Don't
+                               change this unless you know what you are doing.
+
+        @returns a generator that yields [starting_joint_configuration, trajectory] pairs
+        if valid, [starting_joint_configuration, None] pairs if no valid path is found.
+                            
+        """
+        def posesToMotion(start_pose, end_pose):
+            #Get a description of the desired motion as a direction
+            #and number of steps to take from the starting pose
+            motion = end_pose[:3,3] - start_pose[:3,3]
+            motion_len = numpy.linalg.norm(motion)
+            steps = abs(motion_len//step_distance)
+            direction = motion/motion_len
+            return steps, direction
+
+
+
+        def planTurnTrajectory(jointConfig, direction, steps):
+            """@brief - Run the straight line planner on a joint configuration
+            with the given starting direction. May not actually return a valid plan
+            even if a final configuration is returned, because it may not move
+            far enough. 
+            
+            @param Returns a final joint pose
+            """
+            #Set the robot to the starting configuration
+            self.robot.SetActiveDOFValues( jointConfig )
+
+            #Construct the planning string
+            cmd = 'LiftArmGeneralIK breakoncollision 0 exec 0 minsteps %d maxsteps %d direction %s filename straightline_plan.traj' % (steps, steps, Serialize1DMatrix(mat(direction)))
+            #Run the planner
+            response = self.prob_manip.SendCommand( cmd )
+            result = []
+            #If we got a valid result, make it into a joint configuration.
+            try:
+                result = [float(x) for x in response[:-1].split(' ')]
+            except:
+                pdb.set_trace()
+            
+            return result
+
+
+        def getTurnTrajectory(end_pose, joint_config, direction, steps):
+            """
+            @brief Creates a generator for straight forward motion from the starting
+            position defined in joint_config to the end_pose, in the direction and number of steps given.
+
+            @param end_pose - The end pose to plan to. This is used to check that
+                              the planner has gone far enough
+            @param joint_config - The starting joint configuration to plan from.
+
+            @param direction - The direction the planner will run in
+
+            @param steps - The number of steps the planner will attempt to take.
+
+            Step size is defined in the comps.manipulation2 plugin.
+
+            @returns a HuboTrajectory message if possible, None if no trajectory is found. 
+            """
+            result = planTurnTrajectory(joint_config, direction, steps)
+            if result:
+               self.robot.SetActiveDOFValues(result)            
+               final_pose = mat(self.robot.GetActiveManipulator().GetEndEffectorTransform())
+               end_effector_error = dot(final_pose, linalg.inv(end_pose))
+               dist = numpy.linalg.norm(end_effector_error[:3,3])
+               if dist > step_distance:
+                   return None, None
+            else:
+                return None, None
+            
+            
+            or_traj,config=create_trajectory(self.robot)
+            
+            read_trajectory_from_file(or_traj,'turn_plan.traj')
+
+            hubo_traj = self.orTrajToHuboTraj(or_traj)
+            
+            return hubo_traj, or_traj
+
+
+
+
+        #Set up the manipulator
+        manip = self.setupManipulator(manip_index)
+
+        #Get the goal as a vector and number of steps
+        steps, direction = posesToMotion(start_pose, end_pose)
+
+        #find a set of ik solutions for the starting pose
+        solutions = manip.FindIKSolutions(start_pose, IkFilterOptions.CheckEnvCollisions)
+
+        #Otherwise, generate trajectories to the next solution in the list. 
+        for ind,j in enumerate( solutions ):           
+            traj, or_traj = getTurnTrajectory(end_pose, j, direction, steps)
+            yield j, traj, or_traj
+
 
     def build_openrave_environment(self, environment):
         """
