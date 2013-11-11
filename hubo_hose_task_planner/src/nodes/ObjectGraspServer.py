@@ -120,6 +120,7 @@ class GraspPlanner( RobotCBiRRT ):
             #planner later
             startjoints = self.robot.GetActiveDOFValues()
 
+cal function python
             #The hand is allowed to be in collision with the target environment
             #or the world in the final straight line motions to the grasp -- This allows
             #us to push through the hose or other unimportant occlusions
@@ -333,24 +334,8 @@ class GraspPlanner( RobotCBiRRT ):
             #For each viable straight line trajectory, try to plan a motion to the start
             #of that trajectory
             for turn_traj in turn_generator:
-                #If the current trajectory is invalid, try the next one.
-                if turn_traj[1] == None:
-                    continue
-                
-                #The arm motion to the pregrasp pose should not ignore collisions
-                self.setEndEffectorCollisions(manip_index, True)            
-                
-                #Get the joint goal for this the start of this trajectory
-                goaljoints = numpy.array(turn_traj[2].GetWaypoint(0))
-
-
-                #Compose the planning string to reach that joint goal
-                cmdStr = 'RunCBiRRT '
-                cmdStr += 'supportlinks 2 '+self.footlinknames+' smoothingitrs '+str(100)+' jointgoals '+str(len(goaljoints))+' '+Serialize1DMatrix(matrix(goaljoints)) +'jointstarts ' + str(len(startjoints)) + ' ' + Serialize1DMatrix(matrix(startjoints))
-
-                #Run the planner
-                result = self.prob_cbirrt.SendCommand(cmdStr)
-                        
+                result = self.tryTurnTrajectory(turn_traj=turn_traj,initial_pose=initial_pose,turn_transform=turn_transform \
+                                                turn_bounds=turn_bounds,manip_index=manip_index,startjoints=startjoints,goaljoints=goaljoints)
                 
                 #If there was a valid result, parse the resulting trajectory file
                 if result != '':
@@ -368,7 +353,91 @@ class GraspPlanner( RobotCBiRRT ):
             
                 
         return traj
+
+    def tryTurnTrajectory(self,turn_traj,initial_pose,turn_transform,turn_bounds,manip_index,startjoints,goaljoints):
+
+        #If the current trajectory is invalid, try the next one.
+        if turn_traj[1] == None:
+            return ''
+        
+        #The arm motion to the pregrasp pose should not ignore collisions
+        self.setEndEffectorCollisions(manip_index, True)            
+        
+        #Get the joint goal for this the start of this trajectory
+        goaljoints = numpy.array(turn_traj[2].GetWaypoint(0))
+
+
+        #Compose the planning string to reach that joint goal
+        cmds = ['RunCBiRRT']
+
+        #Supporting links
+        cmds = cmds + [
+            'supportlinks',
+            '2',
+            self.footlinknames
+        ]
+
+        #Smoothing
+        cmds = cmds + [
+            'smoothingitrs',
+            str(100)
+        ]
+
+        #Joint goals -- necessary for path constraining
+        cmds = cmds + [
+            'jointgoals',
+            str(len(goaljoints)),
+            Serialize1DMatrix(matrix(goaljoints))
+        ]
+
+        #Joint starts -- not necessary strictly
+        cmds = cmds + [
+            'jointstarts',
+            str(len(startjoints)),
+            Serialize1DMatrix(matrix(startjoints))
+        ]
+
+        #The turn could go either way
+        bounds = [0,0,  0,0,  0,0,
+                  0,0,  0,0,  -0.017,0.017]
+        if(turn_bounds[1]>0):
+            bounds[11]=turn_bounds[1]
+        else:
+            bounds[10]=turn_bounds[1]
+
+        #The meat: the TSR chain
+        cmds = cmds + [
+            'TSRChain',
+            0, #No to start constraining...not sure why that is even useful
+            0, #No to goal constraining because it is sadly incompatible with path constraints -.-
+            1, #Yes to path constraining
+            1, #We only have one TSR
+                manip_index, #The manipulator to use
+                'drchubo_v3', #The robot kinbody name
+                matrixSerialization(initial_pose), #Transform from the base link to the end effector
+                matrixSerialization(turn_transform), #Transform from the end effector to the working point
+                Serialize1DMatrix(bounds), #The bounds on the error from the end effector to the working point
+            "NULL" #Mimic body name
+        ]
+
+
+        cmdStr = ' '.join(cmds)
+
+        #Run the planner
+        return self.prob_cbirrt.SendCommand(cmdStr)
                 
+    def iterateTurnBounds(self, turn_transform, turn_bounds, manip_index, step_size = 0.09):
+        """
+        Runs through a series of positions within the turn bounds. Returns the 
+        farthest rotation that is not in collision.
+
+        @param turn_transform - The rotation that would put the end effector z-axis
+                                exactly at the axis of rotation
+
+        @param turn_bounds - The minimum and maximum rotation around the axis of rotation in list form.
+
+        @param manip_index - The manipulator id as either an integer or a name
+        """
             
     def turnPlanner(self, start_pose, end_pose, manip_index, step_distance = .003):
         """
