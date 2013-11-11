@@ -426,10 +426,12 @@ cal function python
         #Run the planner
         return self.prob_cbirrt.SendCommand(cmdStr)
                 
-    def iterateTurnBounds(self, turn_transform, turn_bounds, manip_index, step_size = 0.09):
+    def generateTurnPositions(self, initial_pose, turn_transform, turn_bounds, manip_index, step_size = 0.09):
         """
         Runs through a series of positions within the turn bounds. Returns the 
         farthest rotation that is not in collision.
+
+        @param initial_pose - The current end effector pose, used to get a rotation axis
 
         @param turn_transform - The rotation that would put the end effector z-axis
                                 exactly at the axis of rotation
@@ -438,6 +440,28 @@ cal function python
 
         @param manip_index - The manipulator id as either an integer or a name
         """
+        step_direction = numpy.copysign(1,turn_bounds[0]-turn_bounds[1]) 
+        #We need to find a pose
+        #Set up the manipulator
+        manip = self.setupManipulator(manip_index)
+        turn_axis = numpy.dot(turn_transform,initial_pose)
+
+        #Punk out a list of steps
+        steps = [turn_bounds[1]+step_direction*step_size*x for x in xrange(0,abs(turn_bounds[1]-turn_bounds[0])//step_size]
+
+        for step in steps:
+            #Form a pose by rotating the displacement and applying its inverse to the axis
+            turn_rotation = pm.fromEuler(0,0,0,0,0,step)
+            turn_displace = numpy.dot(turn_rotation,turn_transform)
+            turn_pose = numpy.dot(numpy.linalg.inv(displace),turn_axis)
+            
+            #find a set of ik solutions for the turned pose
+            solutions = manip.FindIKSolutions(turn_pose, IkFilterOptions.CheckEnvCollisions)
+
+            #Return out all the solutions
+            for solution in solutions:
+                yield solution
+
             
     def turnPlanner(self, start_pose, end_pose, manip_index, step_distance = .003):
         """
