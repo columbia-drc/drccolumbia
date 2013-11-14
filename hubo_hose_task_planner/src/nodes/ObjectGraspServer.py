@@ -352,7 +352,7 @@ class GraspPlanner( RobotCBiRRT ):
 
         #If we have a valid trajectory, pack it in to the response
         if transform != None:            
-            resp.PlannedEETransform = transform
+            resp.PlannedEETransform = pm.fromMatrix(transform).asMessage()
             resp.success = True
         else:
             resp.success = False
