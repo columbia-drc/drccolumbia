@@ -153,15 +153,18 @@ cal function python
 
                 #Run the planner
                 result = self.prob_cbirrt.SendCommand(cmdStr)
-                        
-                
-                #If there was a valid result, parse the resulting trajectory file
+
+                endEffectorTransform = None
+
+                #If there was a valid result, get the transform from it
                 if result != '':
+                    endEffectorTransform = mat(self.robot.GetActiveManipulator().GetEndEffectorTransform())
                     
+                    '''
                     or_traj,config=create_trajectory(self.robot)           
                     read_trajectory_from_file(or_traj,'cmovetraj.txt')
                     traj = [straight_traj[1], self.orTrajToHuboTraj(or_traj), or_traj]
-
+                    '''
                     break            
                 #If we didn't generate a valid plan, try the next straight line trajectory
                 #Disable end effector collisions again before calling the generator
@@ -170,7 +173,7 @@ cal function python
                 self.setEndEffectorCollisions(manip_index, False)
             
                 
-        return traj
+        return endEffectorTransform
                 
             
 
@@ -634,13 +637,12 @@ cal function python
         #Read the manipulator identifier - currently designated as an integer
         manip_index = pose_planning_req.ManipulatorID
 
-        #Generate pregrasp trajectory
-        trajectory = self.pregraspCBiRRT(pregrasp_pose, target_pose, manip_index)
+        #Generate pregrasp transform
+        transform = self.pregraspCBiRRT(pregrasp_pose, target_pose, manip_index)
 
         #If we have a valid trajectory, pack it in to the response
-        if trajectory != None:            
-            resp.PlannedTrajectory = trajectory[1]
-            self.addToPlanDictionary(trajectory[2], trajectory[1])
+        if transform != None:            
+            resp.PlannedEETransform = transform
             resp.success = True
         else:
             resp.success = False
